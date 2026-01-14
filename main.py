@@ -6,5 +6,6 @@ from ligne import *
 if __name__ == "__main__":
     print("Hello Paterliboule")
     
-    ligne = Ligne()
+    ligne = LigneQuatre()
     ligne.draw()
+    
