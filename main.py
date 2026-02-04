@@ -6,13 +6,11 @@ import threading
 import os
 from pathlib import Path
 
-# Config 
-WIDTH, HEIGHT = 1000, 800
+WIDTH, HEIGHT = 1700, 800
 FPS = 60
 START_LAT, START_LON = 47.6386, 6.8631
 START_ZOOM = 13
 
-# URL & Dossiers
 TILE_URL = "https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png"
 BG_COLOR = (240, 240, 240)
 LINE_COLOR = (200, 0, 0)
@@ -28,18 +26,16 @@ def project(lat, lon):
     y = 0.5 - math.log((1 + sin_y) / (1 - sin_y)) / (4 * math.pi)
     return x, y
 
-# frames
 class TileManager:
     def __init__(self, workers=4):
         self.cache = {}
         self.queue = []
         self.lock = threading.Lock()
-        self.session = requests.Session() # Connexion persistante (Boost vitesse)
+        self.session = requests.Session()
         self.session.headers.update({"User-Agent": "OptymoMap/Turbo"})
         
         Path(CACHE_DIR).mkdir(exist_ok=True)
         
-        # Lancer plusieurs workers (4 téléchargements en parallèle)
         self.workers = []
         for _ in range(workers):
             t = threading.Thread(target=self.worker, daemon=True)
@@ -49,13 +45,11 @@ class TileManager:
     def get_tile(self, x, y, z):
         key = (x, y, z)
         
-        # 1. RAM
         if key in self.cache:
             return self.cache[key]
         
         filename = f"{CACHE_DIR}/{z}_{x}_{y}.png"
         
-        # 2. DISQUE
         if os.path.exists(filename):
             try:
                 img = pygame.image.load(filename).convert()
@@ -64,10 +58,8 @@ class TileManager:
             except:
                 pass 
 
-        # 3. FILE D'ATTENTE (Ajouter en priorité haute)
         with self.lock:
             if key not in self.queue:
-                # On insert au début pour que ce soit traité tout de suite (LIFO)
                 self.queue.append(key)
         
         return None
@@ -77,7 +69,6 @@ class TileManager:
             task = None
             with self.lock:
                 if self.queue:
-                    # On prend le DERNIER élément ajouté (le plus récent demandé par la caméra)
                     task = self.queue.pop(-1)
             
             if not task:
@@ -87,12 +78,10 @@ class TileManager:
             x, y, z = task
             filename = f"{CACHE_DIR}/{z}_{x}_{y}.png"
             
-            # Double check si fichier existe (au cas où un autre worker l'a fait)
             if os.path.exists(filename):
                 continue
 
             try:
-                # Utilisation de self.session pour aller plus vite
                 r = self.session.get(TILE_URL.format(x=x, y=y, z=z), timeout=5)
                 if r.status_code == 200:
                     with open(filename, "wb") as f:
@@ -100,12 +89,11 @@ class TileManager:
             except Exception as e:
                 pass
 
-# ================= LOAD GTFS SUPPORT DATA =================
 def load_trips_routes_calendar():
     """Load trips, routes, and calendar data"""
-    trips = {}  # {trip_id: {route_id, service_id}}
-    routes = {}  # {route_id: {short_name, color}}
-    calendar = {}  # {service_id: {mon-sun days}}
+    trips = {}
+    routes = {}
+    calendar = {}
     
     try:
         with open(f"{GTFS_DIR}/trips.txt", encoding='utf-8-sig') as f:
@@ -147,10 +135,9 @@ def load_trips_routes_calendar():
     
     return trips, routes, calendar
 
-# ================= LOAD STOP TIMES =================
 def load_stop_times(trips, calendar):
     """Load stop times indexed by stop_id, organized by route and day"""
-    stop_times = {}  # {stop_id: {route_id: {day_type: [times]}}}
+    stop_times = {}
     try:
         with open(f"{GTFS_DIR}/stop_times.txt", encoding='utf-8-sig') as f:
             for row in csv.DictReader(f):
@@ -175,7 +162,6 @@ def load_stop_times(trips, calendar):
                 if route_id not in stop_times[stop_id]:
                     stop_times[stop_id][route_id] = {'weekday': [], 'saturday': [], 'sunday': []}
                 
-                # Determine day type
                 is_weekday = any(service[day] == '1' for day in ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'])
                 is_saturday = service['saturday'] == '1'
                 is_sunday = service['sunday'] == '1'
@@ -190,7 +176,6 @@ def load_stop_times(trips, calendar):
     except Exception as e:
         print(f"Error loading stop_times.txt: {e}")
     
-    # Sort times for each route/day combo
     for stop_id in stop_times:
         for route_id in stop_times[stop_id]:
             for day_type in ['weekday', 'saturday', 'sunday']:
@@ -198,7 +183,6 @@ def load_stop_times(trips, calendar):
     
     return stop_times
 
-# ================= FORMAT TIMES TABLE =================
 def format_times_table(times_list):
     """Convert list of times (HH:MM:SS) into a grid format {hour: [minutes]}"""
     grid = {h: [] for h in range(6, 23)}
@@ -209,16 +193,14 @@ def format_times_table(times_list):
                 grid[h].append(m)
         except:
             pass
-    # Sort and deduplicate minutes for each hour
     for h in grid:
         grid[h] = sorted(list(set(grid[h])))
     return grid
 
-# ================= CHARGEMENT GTFS =================
 def load_gtfs_data():
     shapes = []
     stops = []
-    stop_info = {}  # {stop_id: {name, lat, lon, world_x, world_y}}
+    stop_info = {}
     print("Chargement GTFS...")
     try:
         with open(f"{GTFS_DIR}/shapes.txt", encoding='utf-8-sig') as f:
@@ -263,13 +245,11 @@ def main():
     small_font = pygame.font.SysFont("Arial", 11)
     tiny_font = pygame.font.SysFont("Arial", 9)
 
-    # 4 Workers pour télécharger vite !
     tile_manager = TileManager(workers=4)
     trips, routes, calendar = load_trips_routes_calendar()
     gtfs_shapes, gtfs_stops_raw, stop_info = load_gtfs_data()
     stop_times = load_stop_times(trips, calendar)
     
-    # Filter stops - only keep those with bus times
     gtfs_stops = [(sx, sy, sid) for sx, sy, sid in gtfs_stops_raw if sid in stop_times]
     print(f"Loaded {len(gtfs_stops)} stops with service (filtered from {len(gtfs_stops_raw)})")
 
@@ -277,13 +257,11 @@ def main():
     zoom = START_ZOOM
     dragging = False
     last_mouse_pos = (0, 0)
-    selected_stop_id = None  # Track selected stop
+    selected_stop_id = None
 
-    # MARGE DE PRÉ-CHARGEMENT (Combien de tuiles hors écran on charge ?)
-    # 1 = charge une rangée de plus autour. 2 = deux rangées (plus sûr, un peu plus lourd)
     PRELOAD_MARGIN = 2 
     TILE_SIZE = 256
-    STOP_RADIUS = 8  # Larger stops for better clickability
+    STOP_RADIUS = 8
 
     running = True
     while running:
@@ -291,13 +269,10 @@ def main():
             if event.type == pygame.QUIT: 
                 running = False
             elif event.type == pygame.MOUSEBUTTONDOWN:
-                if event.button == 1:  # Left click
-                    # Check if clicking on a stop
+                if event.button == 1:
                     mouse_x, mouse_y = event.pos
                     
-                    # Check if clicking in the right panel area (panel is 400px wide)
                     if mouse_x < WIDTH - 400:
-                        # Clicked on map - try to select a stop
                         n = 2 ** zoom
                         world_size = n * TILE_SIZE
                         screen_tl_x = (cam_x * world_size) - (WIDTH / 2)
@@ -308,11 +283,10 @@ def main():
                             px = int((sx * world_size) - screen_tl_x)
                             py = int((sy * world_size) - screen_tl_y)
                             dist = math.sqrt((px - mouse_x)**2 + (py - mouse_y)**2)
-                            if dist <= STOP_RADIUS + 5:  # 5px tolerance
+                            if dist <= STOP_RADIUS + 5:
                                 selected_stop_id = stop_id
                                 break
                     else:
-                        # Clicked in panel area - deselect
                         selected_stop_id = None
                     dragging, last_mouse_pos = True, event.pos
                 elif event.button == 4: zoom = min(zoom + 1, 19)
@@ -333,23 +307,19 @@ def main():
         screen_tl_x = (cam_x * world_size) - (WIDTH / 2)
         screen_tl_y = (cam_y * world_size) - (HEIGHT / 2)
 
-        # Calcul des indices visibles + MARGE
         start_col = int(screen_tl_x / TILE_SIZE) - PRELOAD_MARGIN
         end_col = int((screen_tl_x + WIDTH) / TILE_SIZE) + 1 + PRELOAD_MARGIN
         start_row = int(screen_tl_y / TILE_SIZE) - PRELOAD_MARGIN
         end_row = int((screen_tl_y + HEIGHT) / TILE_SIZE) + 1 + PRELOAD_MARGIN
 
-        # Boucle d'affichage
         for col in range(start_col, end_col):
             for row in range(start_row, end_row):
                 tile_col = col % n
                 tile_row = row 
                 
                 if 0 <= tile_row < n:
-                    # Demande la tuile (si elle est dans la marge, elle sera téléchargée en background)
                     img = tile_manager.get_tile(tile_col, tile_row, zoom)
                     
-                    # On ne dessine QUE ce qui est réellement sur l'écran (pas la marge)
                     draw_x = (col * TILE_SIZE) - screen_tl_x
                     draw_y = (row * TILE_SIZE) - screen_tl_y
                     
@@ -357,15 +327,11 @@ def main():
                         if img:
                             screen.blit(img, (draw_x, draw_y))
                         else:
-                            # Placeholder plus discret
                             pygame.draw.rect(screen, BG_COLOR, (draw_x, draw_y, TILE_SIZE, TILE_SIZE))
 
-        # Lignes & Arrêts (Code identique, juste condensé pour lisibilité)
-        line_width = max(1, int(zoom / 4))
         if gtfs_shapes:
             for shape in gtfs_shapes:
                 points_px = [((sx * world_size) - screen_tl_x, (sy * world_size) - screen_tl_y) for sx, sy in shape]
-                # Culling simple
                 if any(-50 < p[0] < WIDTH+50 and -50 < p[1] < HEIGHT+50 for p in points_px):
                     if len(points_px) > 1: pygame.draw.aalines(screen, LINE_COLOR, False, points_px)
 
@@ -376,7 +342,6 @@ def main():
                     color = (255, 200, 0) if stop_id == selected_stop_id else STOP_COLOR
                     pygame.draw.circle(screen, color, (px, py), STOP_RADIUS)
 
-        # Draw right panel with stop info
         panel_width = 400
         panel_x = WIDTH - panel_width
         pygame.draw.rect(screen, (30, 30, 50), (panel_x, 0, panel_width, HEIGHT))
@@ -386,11 +351,9 @@ def main():
             stop = stop_info[selected_stop_id]
             routes_data = stop_times.get(selected_stop_id, {})
             
-            # Draw stop name
             title = pygame.font.SysFont("Arial", 13, bold=True).render(stop['name'][:35], True, (255, 255, 255))
             screen.blit(title, (panel_x + 8, 8))
             
-            # Draw routes and times
             y_offset = 28
             for route_id in sorted(routes_data.keys()):
                 if y_offset > HEIGHT - 180:
@@ -403,14 +366,12 @@ def main():
                 
                 times_data = routes_data[route_id]
                 
-                # Draw route header with colored background
                 header_rect = pygame.Rect(panel_x + 6, y_offset, panel_width - 12, 18)
                 pygame.draw.rect(screen, route_color, header_rect)
                 route_label = small_font.render(f"Line {route_name}", True, (255, 255, 255))
                 screen.blit(route_label, (panel_x + 10, y_offset + 2))
                 y_offset += 20
                 
-                # Draw times by day type in table format
                 day_types = [('Weekdays', 'weekday'), ('Saturday', 'saturday'), ('Sunday', 'sunday')]
                 for day_label, day_key in day_types:
                     times_list = times_data[day_key]
@@ -419,10 +380,8 @@ def main():
                         screen.blit(day_text, (panel_x + 10, y_offset))
                         y_offset += 12
                         
-                        # Create table
                         grid = format_times_table(times_list)
                         
-                        # Draw hours header
                         x_pos = panel_x + 12
                         col_width = 28
                         for h in range(6, 23):
@@ -430,7 +389,6 @@ def main():
                             screen.blit(h_text, (x_pos + (h - 6) * col_width, y_offset))
                         y_offset += 12
                         
-                        # Draw minutes for each hour (vertical columns)
                         max_mins_in_column = max(len(grid[h]) for h in range(6, 23)) if grid else 0
                         for row in range(max_mins_in_column):
                             x_pos = panel_x + 12
